@@ -1,4 +1,4 @@
-# Multilingual toxicity classifier
+# Multilingual Toxicity Classifier
 
 This repository houses a machine learning project focused on multilingual text classification. The goal of the project is to develop a model capable of classifying text into two categories: "Toxic" and "Non-toxic." The project involves text data in three languages: Spanish, English, and French.
 
