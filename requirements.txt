@@ -1,0 +1,9 @@
+pandas
+matplotlib
+seaborn
+deep_translator
+nltk
+numpy
+sklearn
+transformers
+torch
