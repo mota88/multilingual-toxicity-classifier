@@ -3,10 +3,10 @@
 This repository houses a machine learning project focused on multilingual text classification. The goal of the project is to develop a model capable of classifying text into two categories: "Toxic" and "Non-toxic." The project involves text data in three languages: Spanish, English, and French.
 
 ## Data Preparation
-After pre-processing, the dataset consists of 9,986 rows for each language, with an equal distribution of samples across languages. To handle the multilingual nature of the project, a strategy of concatenating all text data for training has been employed. This involves combining texts from all three languages, along with their corresponding labels.
+After pre-processing, the dataset consists of 9921 rows for each language, with an equal distribution of samples across languages. To handle the multilingual nature of the project, a strategy of concatenating all text data for training has been employed. This involves combining texts from all three languages, along with their corresponding labels.
 
 ## Model Training
-A BERT-type model is fine-tuned for text classification, in particular, the `xlm-roberta-base` (https://huggingface.co/xlm-roberta-base). The training process involves tokenizing the combined multilingual texts and using them to train the model. Class imbalance, where "Class 0" has significantly more examples than "Class 1," is addressed through class weight balancing.
+A BERT-type model is fine-tuned for text classification, in particular, the `bert-base-multilingual-cased` (https://huggingface.co/bert-base-multilingual-cased). The training process involves tokenizing the combined multilingual texts and using them to train the model. Class imbalance, where "Class 0" has significantly more examples than "Class 1," is addressed through class weight balancing.
 
 ## Class Weight Balancing
 The class weights are calculated based on the inverse of the class frequencies in the training set. This approach helps mitigate the impact of class imbalance during training and improves the model's ability to generalize to minority classes.
