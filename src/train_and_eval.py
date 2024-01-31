@@ -1,5 +1,6 @@
 """This file contains training and eval methods of a toxicity classifier."""
 
+from itertools import cycle
 from pathlib import Path
 from tqdm import tqdm
 
@@ -15,17 +16,17 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.utils import compute_class_weight
 import torch
+from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import (
     AutoTokenizer,
-    AutoModelForSequenceClassification,
-    AdamW
+    AutoModelForSequenceClassification
     )
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 train_data_path = Path(__file__).parent / "data" / "train_corrected.csv"
 test_data_path = Path(__file__).parent / "data" / "test.csv"
-num_epochs = 3
+num_epochs = 4
 model_path = Path(__file__).parent / "model" / "toxicity_model.bin"
 
 
@@ -87,53 +88,66 @@ def read_data(train_path: Path, test_path: Path
     test_df = pandas.read_csv(test_path)
     
     # divide data into train and validation
-    df_train, df_validation = train_test_split(
+    train, validation = train_test_split(
         train_df,
         test_size=0.2,
         random_state=42
         )
+    train.reset_index(inplace=True)
+    validation.reset_index(inplace=True)
 
     return df_train, df_validation, test_df, train_df['label']
 
 
-def create_data_loader(df: pandas.DataFrame, columns: list) -> DataLoader:
+def create_data_loader(
+    df: pandas.DataFrame,
+    columns: list,
+    alternate_languages: bool=True,
+    shuffle: bool=True
+    ) -> DataLoader:
     """
     Uses the data to create a DataLoader for model consumption.
 
     Args:
       df (pandas.DataFrame): dataframe containing text and label data
       columns (list): list of dataframe columns names containing the text
+      alternate_languages (bool): bool indicating whether or not to alternate
+      the different languages
+      shuffle (bool): bool indicating whether or not to shuffle the DataLoader
 
     Return:
       DataLoader: data loader for model consumption
     """
-    # concat Spanish, English and French texts
-    concatenated_texts = (
-        df[columns[0]].tolist() +
-        df[columns[1]].tolist() +
-        df[columns[2]].tolist()
-    )
+    list_of_texts = []
+    list_of_labels = df['label'].tolist()
 
-    # get the labels (equal for the 3 languages)
-    labels = df['label'].tolist() * 3
+    if alternate_languages:
+      # used for training and validation, not for evaluation
+      num_rows = len(df)
 
-    # create dataframe with concatenated text and labels
-    concatenated_df = pandas.DataFrame(
-        {'text': concatenated_texts, 'label': labels}
-        )
+      # create a cyclic iterator for the columns
+      column_iterator = cycle(columns)
 
-    # encode data
-    encoded_data = tokenizer(
-        concatenated_df['text'].astype(str).values.tolist(),
-        truncation=True,
-        padding=True,
-        return_tensors='pt'
-    )
+      # get only the text from one lang for each row, and alternate languages
+      for i in range(num_rows):
+        column = next(column_iterator)
+        text_value = str(df.loc[i, column])
+        list_of_texts.append(text_value)
+    else:
+      # concat Spanish, English and French texts
+      list_of_texts = (
+          df[columns[0]].tolist() +
+          df[columns[1]].tolist() +
+          df[columns[2]].tolist()
+      )
+
+      # repeat the labels 3 times (same labels for each language)
+      list_of_labels = df['label'].tolist() * 3
 
     # create dataset
-    dataset = ToxicityDataset(encoded_data, labels)
+    dataset = ToxicityDataset(list_of_texts, list_of_labels)
 
-    return DataLoader(dataset, batch_size=8, shuffle=True)
+    return DataLoader(dataset, batch_size=32, shuffle=shuffle)
 
 
 def train_epoch(
@@ -301,33 +315,41 @@ if __name__ == "__main__":
     # compute weights classes to balance during training
     class_weights = compute_class_weight(
         class_weight='balanced',
-        classes=[0, 1],
-        y=numpy.array(label)
+        classes=numpy.unique(df_train_corrected['label']),
+        y=numpy.array(df_train_corrected['label'])
         )
     class_weights = torch.tensor(class_weights, dtype=torch.float32)
 
-    tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-multilingual-cased')
 
-    # create dataloaders for training, validation and test
+    # create dataloaders for all data
     train_dataloader = create_data_loader(
         train,
         ['text_processed_es', 'text_processed_en', 'text_processed_fr']
         )
     validation_dataloader = create_data_loader(
         validation,
-        ['text_processed_es', 'text_processed_en', 'text_processed_fr']
+        ['text_processed_es', 'text_processed_en', 'text_processed_fr'],
+        shuffle=False
         )
     test_dataloader = create_data_loader(
-        test,
-        ['text', 'english', 'french']
+        df_test,
+        ['text', 'english', 'french'],
+        alternate_languages=False,
+        shuffle=False
         )
     
     model = AutoModelForSequenceClassification.from_pretrained(
-        'xlm-roberta-base',
+        'bert-base-multilingual-cased',
         num_labels=2
         ).to(device)
+    model.classifier = torch.nn.Sequential(
+    torch.nn.Linear(768, 384),
+    torch.nn.Linear(384, 2),
+    torch.nn.ReLU()
+    ).to(device)
 
-    optimizer = AdamW(model.parameters(), lr=5e-5)
+    optimizer = AdamW(model.parameters(), lr=2e-5)
 
     criterion = torch.nn.CrossEntropyLoss(
         weight=class_weights.to(device),
@@ -340,38 +362,38 @@ if __name__ == "__main__":
     best_accuracy = 0
 
     for epoch in range(num_epochs):
-        print(f"Epoch {epoch + 1}/{num_epochs}")
-        print("-" * 10)
+      print(f"Epoch {epoch + 1}/{num_epochs}")
+      print("-" * 10)
 
-        train_acc, train_loss = train_epoch(
-            model,
-            criterion,
-            train_dataloader,
-            optimizer,
-            device,
-            len(train)
-            )
-        val_acc, val_loss = validate_epoch(
-            model,
-            criterion,
-            validation_dataloader,
-            device,
-            len(validation)
-            )
+      train_acc, train_loss = train_epoch(
+          model,
+          criterion,
+          train_dataloader,
+          optimizer,
+          device,
+          len(train)
+          )
+      val_acc, val_loss = validate_epoch(
+          model,
+          criterion,
+          validation_dataloader,
+          device,
+          len(validation)
+          )
 
-        train_accuracies.append(train_acc)
-        train_losses.append(train_loss)
-        val_accuracies.append(val_acc)
-        val_losses.append(val_loss)
+      train_accuracies.append(train_acc)
+      train_losses.append(train_loss)
+      val_accuracies.append(val_acc)
+      val_losses.append(val_loss)
 
-        print(
-            f'Training Acc: {train_acc:.4f}, Training Loss: {train_loss:.4f}'
-            )
-        print(
-            f'Validation Acc: {val_acc:.4f}, Validation Loss: {val_loss:.4f}'
-            )
-      
-        if val_acc > best_accuracy:
+      print(
+          f'Training Accuracy: {train_acc:.4f}, Training Loss: {train_loss:.4f}'
+          )
+      print(
+          f'Validation Accuracy: {val_acc:.4f}, Validation Loss: {val_loss:.4f}'
+          )
+
+      if val_acc > best_accuracy:
             torch.save(model.state_dict(), model_path)
             best_accuracy = val_acc
 
